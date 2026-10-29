@@ -1,0 +1,307 @@
+
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#16364a">
+<title>Animales vs Infectados</title>
+<style>
+</style>
+</head>
+<body>
+<div id="app">
+  <h1>🐾 Animales vs Infectados 🧟</h1>
+  <p class="sub">Defiende el jardín y supera las oleadas.</p>
+  <div class="panel">
+    <div id="hud">
+      <div class="stat">Nivel <span id="level">1</span></div>
+      <div class="stat">🪙 <span id="money">175</span></div>
+      <div class="stat">☠️ <span id="kills">0</span>/<span id="goal">10</span></div>
+    </div>
+    <div id="toolbar">
+      <button class="blue" id="scientist">🧪 Científico · $50</button>
+      <button class="green" id="defender">🐶 Defensor · $100</button>
+      <button class="gold" id="turtle">🐢 Tortuga · $125</button>
+      <button class="blue" id="autoCollect" aria-pressed="false">🪙 Auto recoger: OFF</button>
+      <button class="blue" id="pause" aria-pressed="false">⏸️ Pausar</button>
+      <button class="gray" id="remove">🗑️ Quitar personaje</button>
+      <button class="gray" id="cancel">Cancelar</button>
+    </div>
+    <div id="board" aria-label="Tablero del juego"></div>
+    <div id="message">Elige una unidad y toca una casilla.</div>
+    <div class="help">Toca las monedas 🪙 para recogerlas. Corredores, tanques, infectados con escudo de 100 puntos, sanadores y fantasmas aparecen en niveles avanzados. Las tortugas tienen vida normal y bloquean a los infectados de su fila. Cada 5 niveles aparece un jefe.</div>
+  </div>
+</div>
+<div id="menu">
+ <div class="modal">
+  <div class="logo">🐶 🧪 🧟</div>
+  <h2>ANIMALES VS<br><span style="color:#ffca4c">INFECTADOS</span></h2>
+  <p>Coloca científicos para conseguir monedas, defensores para atacar y tortugas para bloquear infectados y proteger su fila. Sobrevive y derrota a los jefes.</p>
+  <button class="green" id="play" style="font-size:1.25rem;padding:14px 34px">▶ JUGAR</button>
+  <p class="help">Juego web: se abre en tu navegador, sin instalar Python.</p>
+ </div>
+</div>
+<div id="end" class="hidden">
+ <div class="modal">
+  <div class="logo" id="endEmoji">🏆</div>
+  <h2 id="endTitle">¡Nivel completado!</h2>
+  <p id="endText"></p>
+  <button class="green" id="next">Continuar</button>
+ </div>
+</div>
+<script>
+(()=> {
+const $=id=>document.getElementById(id);
+const board=$('board');
+let level=1,money=175,kills=0,goal=10,selected='',units=[],infected=[],shots=[],coins=[],particles=[];
+let running=false,paused=false,autoCollect=false,spawnClock=0,last=0,elapsed=0,bossSpawned=false,levelKills=0,mode='menu',messageTimer=0,removeMode=false;
+const rows=3,cols=7;
+
+function say(t){
+ $('message').textContent=t;
+ messageTimer=2.5;
+}
+function hud(){
+ $('level').textContent=level;
+ $('money').textContent=money;
+ $('kills').textContent=levelKills;
+ $('goal').textContent=goal;
+}
+function buildBoard(){
+ board.innerHTML='';
+ for(let r=0;r<rows;r++){
+  for(let c=0;c<cols;c++){
+   let d=document.createElement('div');
+   d.className='cell';
+   d.dataset.r=r;
+   d.dataset.c=c;
+   d.addEventListener('click',()=>cellClick(r,c));
+   board.appendChild(d);
+  }
+ }
+}
+function draw(){
+ const cells=[...board.children];
+ cells.forEach((el,i)=>{
+  el.textContent='';
+  let r=+el.dataset.r,c=+el.dataset.c;
+  const u=units.find(o=>o.r===r&&o.c===c);
+  if(u){
+   el.textContent=u.kind==='scientist'?'🧪':u.kind==='turtle'?'🐢':'🐶';
+   let hp=document.createElement('div');
+   hp.className='hp';
+   let sp=document.createElement('span');
+   sp.style.width=(u.hp/u.maxHp*100)+'%';
+   hp.appendChild(sp);
+   el.appendChild(hp);
+  }
+  const z=infected.filter(o=>o.r===r).sort((a,b)=>a.x-b.x).find(o=>Math.abs(o.x-(c+.5))<.48);
+  if(z){
+   el.textContent=z.boss?'👹':z.type==='tank'?'🧟‍♂️':z.type==='runner'?'🏃':'🧟';
+  }
+ });
+ hud();
+}
+function cellClick(r,c){
+ if(!running||paused)return;
+ if(removeMode){
+  const i=units.findIndex(u=>u.r===r&&u.c===c);
+  if(i>=0){
+   let u=units.splice(i,1)[0];
+   money+=Math.floor(u.cost/2);
+   removeMode=false;
+   say('Personaje retirado.');
+  }
+  draw();
+  return;
+ }
+ if(!selected)return;
+ if(units.some(u=>u.r===r&&u.c===c)){
+  say('Esa casilla está ocupada.');
+  return;
+ }
+ const prices={scientist:50,defender:100,turtle:125};
+ let cost=prices[selected];
+ if(money<cost){
+  say('No tienes suficientes monedas.');
+  return;
+ }
+ money-=cost;
+ let hp=selected==='turtle'?300:selected==='defender'?150:100;
+ units.push({r,c,kind:selected,hp,maxHp:hp,cost,shoot:0});
+ selected='';
+ say('¡Personaje colocado!');
+ draw();
+}
+function startLevel(n){
+ level=n;
+ money+=0;
+ kills=0;
+ levelKills=0;
+ goal=10+Math.floor((level-1)*1.5);
+ units=[];
+ infected=[];
+ shots=[];
+ coins=[];
+ particles=[];
+ elapsed=0;
+ spawnClock=0;
+ bossSpawned=false;
+ paused=false;
+ running=true;
+ mode='game';
+ $('end').classList.add('hidden');
+ $('menu').classList.add('hidden');
+ $('pause').textContent='⏸️ Pausar';
+ $('pause').setAttribute('aria-pressed','false');
+ hud();
+ buildBoard();
+ say('¡Defiende el jardín!');
+ draw();
+}
+function spawn(){
+ let r=Math.floor(Math.random()*rows);
+ let boss=level%5===0&&!bossSpawned;
+ if(boss)bossSpawned=true;
+ let type=boss?'boss':level>=4&&Math.random()<.25?'tank':level>=3&&Math.random()<.25?'runner':'normal';
+ infected.push({
+  r,x:cols+.2,
+  hp:boss?1000: type==='tank'?260:type==='runner'?65:100,
+  maxHp:boss?1000:type==='tank'?260:type==='runner'?65:100,
+  speed:boss?1.1+level*.03:type==='tank'?.15:type==='runner'?.55:.25+level*.01,
+  type,boss,attack:0,eating:false
+ });
+}
+function update(dt){
+ if(!running||paused)return;
+ elapsed+=dt;
+ spawnClock+=dt;
+ if(spawnClock>Math.max(1.1,4-level*.08)&&levelKills<goal){
+  spawnClock=0;
+  spawn();
+ }
+ units.forEach(u=>{
+  if(u.kind==='scientist'){
+   u.shoot+=dt;
+   if(u.shoot>5){
+    u.shoot=0;
+    coins.push({r:u.r,c:u.c,age:0});
+   }
+  }
+  if(u.kind==='defender'){
+   u.shoot+=dt;
+   if(u.shoot>1.2){
+    u.shoot=0;
+    let target=infected.find(z=>z.r===u.r&&z.x>u.c);
+    if(target){
+     target.hp-=35;
+     if(target.hp<=0)target.dead=true;
+    }
+   }
+  }
+ });
+ infected.forEach(z=>{
+  let meal=units.filter(u=>u.r===z.r&&u.c+.5<z.x+.05).sort((a,b)=>b.c-a.c)[0];
+  if(meal&&z.x<=meal.c+.78&&z.x>=meal.c+.12){
+   z.x=Math.max(z.x,meal.c+.62);
+   z.eating=true;
+   z.attack=(z.attack||0)+dt;
+   if(z.attack>=.75){
+    z.attack=0;
+    meal.hp-=z.boss?28:z.type==='tank'?22:z.type==='runner'?8:14;
+    if(meal.hp<=0)meal.dead=true;
+   }
+  }else{
+   z.eating=false;
+   z.x-=z.speed*dt;
+  }
+  if(z.x<-.2)z.reached=true;
+ });
+ units=units.filter(u=>u.hp>0&&!u.dead);
+ if(infected.some(z=>z.reached)){
+  running=false;
+  finish('¡Fin del juego!','Los infectados alcanzaron el refugio.','Intentar de nuevo','🧟');
+  return;
+ }
+ infected.forEach(z=>{
+  if(z.dead){
+   levelKills++;
+   money+=10;
+  }
+ });
+ infected=infected.filter(z=>!z.dead);
+ coins.forEach(c=>c.age+=dt);
+ coins=coins.filter(c=>c.age<12);
+ if(autoCollect){
+  money+=coins.length*5;
+  coins=[];
+ }
+ if(levelKills>=goal&&infected.length===0){
+  running=false;
+  money+=75+level*10;
+  finish('¡Nivel '+level+' completado!','Ganaste una bonificación de monedas.','Siguiente nivel','🎉');
+  mode='clear';
+ }
+ if(messageTimer>0)messageTimer-=dt;
+ draw();
+}
+function finish(title,txt,button,emoji){
+ $('endTitle').textContent=title;
+ $('endText').textContent=txt;
+ $('endEmoji').textContent=emoji;
+ $('next').textContent=button;
+ $('end').classList.remove('hidden');
+}
+$('scientist').onclick=()=>{
+ if(running&&!paused){selected='scientist';removeMode=false;say('Toca una casilla vacía.');}
+};
+$('defender').onclick=()=>{
+ if(running&&!paused){selected='defender';removeMode=false;say('Toca una casilla vacía.');}
+};
+$('turtle').onclick=()=>{
+ if(running&&!paused){selected='turtle';removeMode=false;say('🐢 Tortuga escudo.');}
+};
+$('remove').onclick=()=>{
+ if(running&&!paused){selected='';removeMode=true;say('Toca el personaje que quieras retirar.');}
+};
+$('cancel').onclick=()=>{
+ selected='';
+ removeMode=false;
+ say('Selección cancelada.');
+};
+$('autoCollect').onclick=()=>{
+ autoCollect=!autoCollect;
+ $('autoCollect').textContent='🪙 Auto recoger: '+(autoCollect?'ON':'OFF');
+ $('autoCollect').setAttribute('aria-pressed',String(autoCollect));
+};
+$('pause').onclick=()=>{
+ if(!running)return;
+ paused=!paused;
+ $('pause').textContent=paused?'▶️ Reanudar':'⏸️ Pausar';
+ $('pause').setAttribute('aria-pressed',String(paused));
+ say(paused?'Juego pausado.':'Juego reanudado.');
+};
+$('play').onclick=()=>startLevel(1);
+$('next').onclick=()=>{
+ if(mode==='clear'){
+  startLevel(level+1);
+ }else{
+  $('end').classList.add('hidden');
+  startLevel(1);
+ }
+};
+buildBoard();
+draw();
+function frame(ts){
+ if(!last)last=ts;
+ let dt=Math.min((ts-last)/1000,.05);
+ last=ts;
+ if(running&&!paused)update(dt);
+ requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
